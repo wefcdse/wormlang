@@ -105,12 +105,13 @@
     <label>配置 2 · 头尾（最前 / 最后一个固定的词）</label>
     <div class="row">
       <label class="inline">头词 <input id="start" type="text" value="咩"></label>
-      <label class="inline">尾词 <input id="end" type="text" value="咩"></label>
+      <label class="inline">尾词 <input id="end" type="text" value="🌧️"></label>
       <button id="noframe">清空头尾</button>
     </div>
     <div class="row">
-      <button id="preset_worm">整套：粘粘虫语（粘粘虫/扁扁虫，无头尾）</button>
+      <button id="preset_emoji">整套：咩/🐟/🌧（默认）</button>
       <button id="preset_mie">整套：咩语（咩/空格，头尾咩）</button>
+      <button id="preset_worm">整套：粘粘虫语（粘粘虫/扁扁虫，无头尾）</button>
     </div>
     <div class="info">例：词表 咩/空格 + 头尾咩 → <b>咩 咩咩 咩 咩</b>（咩/空格本身是编码词，无分隔符）</div>
   </section>
@@ -142,7 +143,7 @@ import init, { encode, decode, block_info } from './pkg/wormlang.js';
 await init();
 
 const $ = (id) => document.getElementById(id);
-let words = ['粘粘虫', '扁扁虫'];
+let words = ['咩', ' ', '🐟️', '🌧️'];
 
 function renderWords() {
   const box = $('words');
@@ -193,6 +194,7 @@ $('newword').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('add'
 $('preset3').onclick = () => { words = ['粘粘虫', '扁扁虫', '西瓜虫']; renderWords(); };
 $('reset').onclick = () => { words = ['粘粘虫', '扁扁虫']; renderWords(); };
 $('noframe').onclick = () => { $('start').value = ''; $('end').value = ''; };
+$('preset_emoji').onclick = () => { words = ['咩', ' ', '🐟️', '🌧️']; $('start').value = '咩'; $('end').value = '🌧️'; renderWords(); };
 $('preset_worm').onclick = () => { words = ['粘粘虫', '扁扁虫']; $('start').value = ''; $('end').value = ''; renderWords(); };
 $('preset_mie').onclick = () => { words = ['咩', ' ']; $('start').value = '咩'; $('end').value = '咩'; renderWords(); };
 
