@@ -5,6 +5,10 @@ use std::collections::{BinaryHeap, HashMap, VecDeque};
 /// Longest code we are willing to represent in a `u32`.
 pub const MAX_CODE_LEN: u8 = 32;
 
+/// Assumed average message length, used to weight the end-of-message leaf: it
+/// occurs once per message, so its weight is `total_chars / MESSAGE_LEN`.
+pub const MESSAGE_LEN: u64 = 20;
+
 /// A Huffman codebook, laid out for the "sticky worm" bit stream.
 #[derive(Debug, Clone)]
 pub struct Codebook {
@@ -16,12 +20,15 @@ pub struct Codebook {
     pub encode: Vec<(char, u32, u8)>,
     /// Code of the fallback leaf, `(code, bit_len)`.
     pub escape: Option<(u32, u8)>,
+    /// Code of the end-of-message leaf, `(code, bit_len)`.
+    pub eof: Option<(u32, u8)>,
 }
 
 #[derive(Debug, Clone, Copy)]
 enum Node {
     Leaf(char),
     Escape,
+    Eof,
     Internal { left: usize, right: usize },
 }
 
@@ -47,6 +54,9 @@ pub fn build_codebook(counts: impl IntoIterator<Item = (char, u64)>) -> Result<C
         .sum::<u64>()
         * 2;
 
+    let total: u64 = entries.iter().map(|(_, weight)| weight).sum();
+    let eof_weight = (total / MESSAGE_LEN).max(1);
+
     let mut nodes: Vec<Node> = Vec::with_capacity(entries.len() * 2 + 1);
     let mut heap: BinaryHeap<Reverse<(u64, usize)>> = BinaryHeap::new();
 
@@ -59,6 +69,10 @@ pub fn build_codebook(counts: impl IntoIterator<Item = (char, u64)>) -> Result<C
     let escape_idx = nodes.len();
     nodes.push(Node::Escape);
     heap.push(Reverse((escape_weight, escape_idx)));
+
+    let eof_idx = nodes.len();
+    nodes.push(Node::Eof);
+    heap.push(Reverse((eof_weight, eof_idx)));
 
     while heap.len() > 1 {
         let Reverse((wa, a)) = heap.pop().unwrap();
@@ -90,10 +104,11 @@ pub fn build_codebook(counts: impl IntoIterator<Item = (char, u64)>) -> Result<C
 
     let mut encode: Vec<(char, u32, u8)> = Vec::new();
     let mut escape = None;
-    walk(root, 0, 0, &nodes, &mut encode, &mut escape)?;
+    let mut eof = None;
+    walk(root, 0, 0, &nodes, &mut encode, &mut escape, &mut eof)?;
     encode.sort_unstable_by_key(|e| e.0);
 
-    Ok(Codebook { table, encode, escape })
+    Ok(Codebook { table, encode, escape, eof })
 }
 
 fn resolve(
@@ -106,6 +121,7 @@ fn resolve(
     match nodes[arena_idx] {
         Node::Leaf(ch) => Op::Str(ch),
         Node::Escape => Op::Escape,
+        Node::Eof => Op::Eof,
         Node::Internal { .. } => {
             if let Some(&table_idx) = index_of.get(&arena_idx) {
                 Op::Jmp(table_idx as u32)
@@ -127,29 +143,38 @@ fn walk(
     nodes: &[Node],
     encode: &mut Vec<(char, u32, u8)>,
     escape: &mut Option<(u32, u8)>,
+    eof: &mut Option<(u32, u8)>,
 ) -> Result<(), String> {
     match nodes[idx] {
         Node::Leaf(ch) => {
-            if len > MAX_CODE_LEN {
-                return Err(format!("code length {len} exceeds {MAX_CODE_LEN} bits"));
-            }
+            check_len(len)?;
             encode.push((ch, code as u32, len));
         }
         Node::Escape => {
-            if len > MAX_CODE_LEN {
-                return Err(format!("code length {len} exceeds {MAX_CODE_LEN} bits"));
-            }
+            check_len(len)?;
             *escape = Some((code as u32, len));
+        }
+        Node::Eof => {
+            check_len(len)?;
+            *eof = Some((code as u32, len));
         }
         Node::Internal { left, right } => {
             if len >= MAX_CODE_LEN {
                 return Err(format!("code length exceeds {MAX_CODE_LEN} bits"));
             }
-            walk(left, code << 1, len + 1, nodes, encode, escape)?;
-            walk(right, (code << 1) | 1, len + 1, nodes, encode, escape)?;
+            walk(left, code << 1, len + 1, nodes, encode, escape, eof)?;
+            walk(right, (code << 1) | 1, len + 1, nodes, encode, escape, eof)?;
         }
     }
     Ok(())
+}
+
+fn check_len(len: u8) -> Result<(), String> {
+    if len > MAX_CODE_LEN {
+        Err(format!("code length {len} exceeds {MAX_CODE_LEN} bits"))
+    } else {
+        Ok(())
+    }
 }
 
 impl Codebook {
@@ -158,11 +183,13 @@ impl Codebook {
         table: &[(Op, Op)],
         encode: &[(char, u32, u8)],
         escape: (u32, u8),
+        eof: (u32, u8),
     ) -> Codebook {
         Codebook {
             table: table.to_vec(),
             encode: encode.to_vec(),
             escape: Some(escape),
+            eof: Some(eof),
         }
     }
 
@@ -189,8 +216,27 @@ impl Codebook {
         bits
     }
 
+    /// Encode `text` and append the end-of-message code.
+    pub fn encode_terminated(&self, text: &str) -> Vec<bool> {
+        let mut bits = self.encode_text(text);
+        if let Some((code, len)) = self.eof {
+            push_code(&mut bits, code, len);
+        }
+        bits
+    }
+
     /// Decode a bit stream produced by [`Codebook::encode_text`].
     pub fn decode_bits(&self, bits: &[bool]) -> Result<String, String> {
+        self.decode(bits, false)
+    }
+
+    /// Decode a bit stream produced by [`Codebook::encode_terminated`],
+    /// stopping at the end-of-message code and ignoring any trailing bits.
+    pub fn decode_terminated(&self, bits: &[bool]) -> Result<String, String> {
+        self.decode(bits, true)
+    }
+
+    fn decode(&self, bits: &[bool], stop_at_eof: bool) -> Result<String, String> {
         let mut out = String::new();
         let mut state: u32 = 0;
         let mut i = 0;
@@ -211,9 +257,19 @@ impl Codebook {
                     out.push_str(&read_utf8(bits, &mut i)?);
                     state = 0;
                 }
+                Op::Eof => {
+                    if stop_at_eof {
+                        return Ok(out);
+                    }
+                    return Err("unexpected end-of-message code".to_string());
+                }
             }
         }
-        Ok(out)
+        if stop_at_eof {
+            Err("bit stream ended before the end-of-message code".to_string())
+        } else {
+            Ok(out)
+        }
     }
 }
 
@@ -299,8 +355,25 @@ mod tests {
         if table.is_empty() {
             return; // placeholder table, nothing to verify yet
         }
-        let cb = Codebook::from_static(table, crate::tree::ENCODE, crate::tree::ESCAPE);
+        let cb = Codebook::from_static(
+            table,
+            crate::tree::ENCODE,
+            crate::tree::ESCAPE,
+            crate::tree::EOF,
+        );
         let text = "粘粘虫 和 扁扁虫! Hello 汐~ 鿿🦑 unknown chars";
         assert_eq!(cb.decode_bits(&cb.encode_text(text)).unwrap(), text);
+        assert_eq!(
+            cb.decode_terminated(&cb.encode_terminated(text)).unwrap(),
+            text
+        );
+    }
+
+    #[test]
+    fn terminated_stream_stops_at_eof() {
+        let cb = codebook("hello world 粘粘虫");
+        let mut bits = cb.encode_terminated("hi 虫");
+        bits.extend_from_slice(&[true, false, true, true]);
+        assert_eq!(cb.decode_terminated(&bits).unwrap(), "hi 虫");
     }
 }

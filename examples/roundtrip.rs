@@ -19,7 +19,12 @@ fn bin_path() -> PathBuf {
 fn main() {
     let path = env::args().nth(1).expect("usage: roundtrip <text-file>");
     let text = fs::read_to_string(&path).expect("failed to read input file");
-    let cb = Codebook::from_static(wormlang::tree::TABLE, wormlang::tree::ENCODE, wormlang::tree::ESCAPE);
+    let cb = Codebook::from_static(
+        wormlang::tree::TABLE,
+        wormlang::tree::ENCODE,
+        wormlang::tree::ESCAPE,
+        wormlang::tree::EOF,
+    );
 
     let bits = cb.encode_text(&text);
     let packed = pack(&bits);

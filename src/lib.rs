@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 pub mod huffman;
+pub mod words;
 
 /// One branch of a decoded internal node.
 ///
@@ -11,6 +12,8 @@ pub enum Op {
     Str(char),
     /// The fallback leaf: read one raw UTF-8 sequence from the bit stream.
     Escape,
+    /// The end-of-message leaf: stop decoding here.
+    Eof,
     /// Follow this edge to another internal node (index into `TABLE`).
     Jmp(u32),
 }
