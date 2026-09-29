@@ -90,29 +90,29 @@
   <p class="sub">把文字编码成一串「虫语」，或反向解码。词表 >= 2 个，词之间不能互为前缀。</p>
 
   <section class="card">
-    <label>词表（每个词是一位「N 进制数字」，多一个词就多一分效率）</label>
+    <label>配置 1 · 词表（编码词，每个词是一位「N 进制数字」；空格也能当一个词）</label>
     <div id="words" class="chips"></div>
     <div class="row">
       <input id="newword" type="text" placeholder="新增一个词，例如 西瓜虫">
       <button id="add">添加</button>
-      <button id="preset3">粘粘虫 / 扁扁虫 / 西瓜虫</button>
+      <button id="preset3">粘粘虫/扁扁虫/西瓜虫</button>
       <button id="reset">重置</button>
     </div>
-    <div class="row" style="margin-top:14px">
-      <label class="inline">起始词 <input id="start" type="text" value="咩"></label>
-      <label class="inline">结束词 <input id="end" type="text" value="咩"></label>
-      <label class="inline">分隔符
-        <select id="sep">
-          <option value=" " selected>空格</option>
-          <option value="">无</option>
-          <option value="，">逗号</option>
-          <option value="·">中点</option>
-          <option value="　">全角空格</option>
-        </select>
-      </label>
-      <button id="noframe">清空框定</button>
-    </div>
     <div id="info" class="info"></div>
+  </section>
+
+  <section class="card">
+    <label>配置 2 · 头尾（最前 / 最后一个固定的词）</label>
+    <div class="row">
+      <label class="inline">头词 <input id="start" type="text" value="咩"></label>
+      <label class="inline">尾词 <input id="end" type="text" value="咩"></label>
+      <button id="noframe">清空头尾</button>
+    </div>
+    <div class="row">
+      <button id="preset_worm">整套：粘粘虫语（粘粘虫/扁扁虫，无头尾）</button>
+      <button id="preset_mie">整套：咩语（咩/空格，头尾咩）</button>
+    </div>
+    <div class="info">例：词表 咩/空格 + 头尾咩 → <b>咩 咩咩 咩 咩</b>（咩/空格本身是编码词，无分隔符）</div>
   </section>
 
   <section class="card">
@@ -151,7 +151,7 @@ function renderWords() {
     const chip = document.createElement('span');
     chip.className = 'chip';
     const label = document.createElement('b');
-    label.textContent = w;
+    label.textContent = w === ' ' ? '␣（空格）' : w;
     const del = document.createElement('button');
     del.textContent = '×';
     del.title = '删除';
@@ -192,14 +192,16 @@ $('add').onclick = () => {
 $('newword').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('add').click(); });
 $('preset3').onclick = () => { words = ['粘粘虫', '扁扁虫', '西瓜虫']; renderWords(); };
 $('reset').onclick = () => { words = ['粘粘虫', '扁扁虫']; renderWords(); };
-$('noframe').onclick = () => { $('start').value = ''; $('end').value = ''; $('sep').value = ''; };
+$('noframe').onclick = () => { $('start').value = ''; $('end').value = ''; };
+$('preset_worm').onclick = () => { words = ['粘粘虫', '扁扁虫']; $('start').value = ''; $('end').value = ''; renderWords(); };
+$('preset_mie').onclick = () => { words = ['咩', ' ']; $('start').value = '咩'; $('end').value = '咩'; renderWords(); };
 
-const frame = () => [$('start').value || undefined, $('end').value || undefined, $('sep').value];
+const frame = () => [$('start').value || undefined, $('end').value || undefined];
 
 $('enc').onclick = () => {
   try {
-    const [start, end, sep] = frame();
-    const out = encode($('input').value, words.join(','), start, end, sep);
+    const [start, end] = frame();
+    const out = encode($('input').value, words.join(','), start, end);
     $('output').value = out;
     setStat(`输入 <b>${[...$('input').value].length}</b> 字 → 虫语 <b>${[...out].length}</b> 字`);
   } catch (e) { setStat(String(e), true); }
@@ -207,8 +209,8 @@ $('enc').onclick = () => {
 
 $('dec').onclick = () => {
   try {
-    const [start, end, sep] = frame();
-    const out = decode($('input').value.trim(), words.join(','), start, end, sep);
+    const [start, end] = frame();
+    const out = decode($('input').value.trim(), words.join(','), start, end);
     $('output').value = out;
     setStat(`解码成功，<b>${[...out].length}</b> 字`);
   } catch (e) { setStat(String(e), true); }

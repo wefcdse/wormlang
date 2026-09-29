@@ -13,10 +13,11 @@ fn codebook() -> Codebook {
 }
 
 fn parse_words(words: &str) -> Vec<String> {
+    // No trimming: a lone space is a legitimate word.
     words
-        .split([',', ';', '\n'])
-        .map(|word| word.trim().to_string())
+        .split([',', ';'])
         .filter(|word| !word.is_empty())
+        .map(str::to_string)
         .collect()
 }
 
@@ -28,25 +29,24 @@ fn build(
     words: &str,
     start: Option<String>,
     end: Option<String>,
-    separator: String,
 ) -> Result<Encoding, JsValue> {
-    Encoding::framed(codebook(), parse_words(words), opt(start), opt(end), separator)
+    Encoding::framed(codebook(), parse_words(words), opt(start), opt(end))
         .map_err(|e| JsValue::from_str(&e))
 }
 
 /// Encode `text` into worm text.
 ///
 /// `words` is comma/semicolon/newline separated. `start`/`end` are optional
-/// frame words placed at the very front/back; `separator` goes between tokens.
+/// frame words placed at the very front/back; words are concatenated with no
+/// separator.
 #[wasm_bindgen]
 pub fn encode(
     text: &str,
     words: &str,
     start: Option<String>,
     end: Option<String>,
-    separator: String,
 ) -> Result<String, JsValue> {
-    Ok(build(words, start, end, separator)?.encode(text))
+    Ok(build(words, start, end)?.encode(text))
 }
 
 /// Decode worm text back into the original text.
@@ -56,9 +56,8 @@ pub fn decode(
     words: &str,
     start: Option<String>,
     end: Option<String>,
-    separator: String,
 ) -> Result<String, JsValue> {
-    build(words, start, end, separator)?
+    build(words, start, end)?
         .decode(worms)
         .map_err(|e| JsValue::from_str(&e))
 }
