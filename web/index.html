@@ -70,6 +70,15 @@
   button.primary:hover { filter: brightness(1.12); }
   .panes { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   @media (max-width: 720px) { .panes { grid-template-columns: 1fr; } }
+  label.inline {
+    display: inline-flex; align-items: center; gap: 8px;
+    margin: 0; color: var(--muted); font-size: 13px; white-space: nowrap;
+  }
+  label.inline input[type=text] { width: 90px; }
+  select {
+    background: #081f33; color: var(--ink); border: 1px solid var(--line);
+    border-radius: 10px; padding: 9px 10px; font-size: 14px; font-family: inherit;
+  }
   .info { margin-top: 10px; font-size: 13px; color: var(--muted); min-height: 18px; }
   .info.err { color: var(--danger); }
   .info b { color: var(--accent); font-weight: 600; }
@@ -88,6 +97,20 @@
       <button id="add">添加</button>
       <button id="preset3">粘粘虫 / 扁扁虫 / 西瓜虫</button>
       <button id="reset">重置</button>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <label class="inline">起始词 <input id="start" type="text" value="咩"></label>
+      <label class="inline">结束词 <input id="end" type="text" value="咩"></label>
+      <label class="inline">分隔符
+        <select id="sep">
+          <option value=" " selected>空格</option>
+          <option value="">无</option>
+          <option value="，">逗号</option>
+          <option value="·">中点</option>
+          <option value="　">全角空格</option>
+        </select>
+      </label>
+      <button id="noframe">清空框定</button>
     </div>
     <div id="info" class="info"></div>
   </section>
@@ -169,10 +192,14 @@ $('add').onclick = () => {
 $('newword').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('add').click(); });
 $('preset3').onclick = () => { words = ['粘粘虫', '扁扁虫', '西瓜虫']; renderWords(); };
 $('reset').onclick = () => { words = ['粘粘虫', '扁扁虫']; renderWords(); };
+$('noframe').onclick = () => { $('start').value = ''; $('end').value = ''; $('sep').value = ''; };
+
+const frame = () => [$('start').value || undefined, $('end').value || undefined, $('sep').value];
 
 $('enc').onclick = () => {
   try {
-    const out = encode($('input').value, words.join(','));
+    const [start, end, sep] = frame();
+    const out = encode($('input').value, words.join(','), start, end, sep);
     $('output').value = out;
     setStat(`输入 <b>${[...$('input').value].length}</b> 字 → 虫语 <b>${[...out].length}</b> 字`);
   } catch (e) { setStat(String(e), true); }
@@ -180,7 +207,8 @@ $('enc').onclick = () => {
 
 $('dec').onclick = () => {
   try {
-    const out = decode($('input').value.trim(), words.join(','));
+    const [start, end, sep] = frame();
+    const out = decode($('input').value.trim(), words.join(','), start, end, sep);
     $('output').value = out;
     setStat(`解码成功，<b>${[...out].length}</b> 字`);
   } catch (e) { setStat(String(e), true); }

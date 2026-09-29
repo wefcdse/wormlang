@@ -8,6 +8,10 @@
 //!
 //! Because base `N` is not a power of two in general, the conversion is done in
 //! fixed blocks: `block_words` words hold `block_bits = floor(L·log2 N)` bits.
+//!
+//! On top of that, an optional "frame" wraps the result: a `start` word in
+//! front, an `end` word at the back, and a `separator` between everything. For
+//! example `start=咩, end=咩, separator=" "` renders `咩 粘粘虫 扁扁虫 … 咩`.
 
 use std::collections::HashSet;
 
@@ -16,16 +20,27 @@ use crate::huffman::Codebook;
 #[derive(Debug, Clone)]
 pub struct WordCodec {
     words: Vec<String>,
+    start: Option<String>,
+    end: Option<String>,
+    separator: String,
     block_words: usize,
     block_bits: usize,
 }
 
 impl WordCodec {
-    /// Build a codec for the given word list.
-    ///
-    /// Words must be distinct, non-empty and prefix-free (no word may be a
-    /// prefix of another), so that a run of words can be split unambiguously.
+    /// Build a codec for the given word list, with no frame.
     pub fn new(words: Vec<String>) -> Result<Self, String> {
+        Self::framed(words, None, None, String::new())
+    }
+
+    /// Build a codec with a frame: an optional `start` word, an optional `end`
+    /// word, and a `separator` placed between all tokens.
+    pub fn framed(
+        words: Vec<String>,
+        start: Option<String>,
+        end: Option<String>,
+        separator: String,
+    ) -> Result<Self, String> {
         if words.len() < 2 {
             return Err("need at least two words".to_string());
         }
@@ -38,10 +53,36 @@ impl WordCodec {
                 return Err(format!("duplicate word: {word}"));
             }
         }
-        for a in &words {
-            for b in &words {
-                if a != b && b.starts_with(a.as_str()) {
-                    return Err(format!("word {a:?} is a prefix of {b:?}"));
+
+        let start = start.filter(|s| !s.is_empty());
+        let end = end.filter(|s| !s.is_empty());
+        for frame in [start.as_deref(), end.as_deref()].into_iter().flatten() {
+            if seen.contains(frame) {
+                return Err(format!("frame word {frame:?} clashes with a data word"));
+            }
+        }
+
+        if separator.is_empty() {
+            // Without a separator every token must be prefix-free.
+            let mut all: Vec<&str> = words.iter().map(String::as_str).collect();
+            all.extend(start.as_deref());
+            all.extend(end.as_deref());
+            for (i, a) in all.iter().enumerate() {
+                for (j, b) in all.iter().enumerate() {
+                    if i != j && b.starts_with(a) {
+                        return Err(format!("token {a:?} is a prefix of {b:?}"));
+                    }
+                }
+            }
+        } else {
+            for token in words
+                .iter()
+                .map(String::as_str)
+                .chain(start.as_deref())
+                .chain(end.as_deref())
+            {
+                if token.contains(&separator) {
+                    return Err(format!("token {token:?} contains the separator"));
                 }
             }
         }
@@ -49,6 +90,9 @@ impl WordCodec {
         let (block_words, block_bits) = choose_block(words.len());
         Ok(Self {
             words,
+            start,
+            end,
+            separator,
             block_words,
             block_bits,
         })
@@ -58,68 +102,105 @@ impl WordCodec {
         &self.words
     }
 
+    pub fn start(&self) -> Option<&str> {
+        self.start.as_deref()
+    }
+
+    pub fn end(&self) -> Option<&str> {
+        self.end.as_deref()
+    }
+
+    pub fn separator(&self) -> &str {
+        &self.separator
+    }
+
     /// `(block_words, block_bits)`: how many words carry how many bits.
     pub fn block(&self) -> (usize, usize) {
         (self.block_words, self.block_bits)
     }
 
-    /// Words per bit, i.e. how efficiently the block packs bits.
+    /// Bits carried per word, i.e. how efficiently the block packs bits.
     pub fn bits_per_word(&self) -> f64 {
         self.block_bits as f64 / self.block_words as f64
     }
 
-    /// Encode a bit stream into word text. The stream is zero-padded to a whole
-    /// block; a terminated stream (ending in its EOF code) makes the padding
-    /// harmless.
+    /// Encode a bit stream into word text.
     pub fn encode_bits(&self, bits: &[bool]) -> String {
-        if bits.is_empty() {
-            return String::new();
+        let mut tokens: Vec<&str> = Vec::new();
+        if let Some(start) = self.start.as_deref() {
+            tokens.push(start);
         }
-        let n = self.words.len() as u64;
-        let mut out = String::new();
-        let mut i = 0;
-        loop {
-            let mut value = 0u64;
-            for _ in 0..self.block_bits {
-                value <<= 1;
-                if i < bits.len() {
-                    if bits[i] {
-                        value |= 1;
+        if !bits.is_empty() {
+            let n = self.words.len() as u64;
+            let mut i = 0;
+            loop {
+                let mut value = 0u64;
+                for _ in 0..self.block_bits {
+                    value <<= 1;
+                    if i < bits.len() {
+                        if bits[i] {
+                            value |= 1;
+                        }
+                        i += 1;
                     }
-                    i += 1;
+                }
+                let mut digits = vec![0usize; self.block_words];
+                let mut rest = value;
+                for slot in digits.iter_mut().rev() {
+                    *slot = (rest % n) as usize;
+                    rest /= n;
+                }
+                for digit in digits {
+                    tokens.push(&self.words[digit]);
+                }
+                if i >= bits.len() {
+                    break;
                 }
             }
-            let mut digits = vec![0usize; self.block_words];
-            let mut rest = value;
-            for slot in digits.iter_mut().rev() {
-                *slot = (rest % n) as usize;
-                rest /= n;
-            }
-            for digit in digits {
-                out.push_str(&self.words[digit]);
-            }
-            if i >= bits.len() {
-                break;
-            }
         }
-        out
+        if let Some(end) = self.end.as_deref() {
+            tokens.push(end);
+        }
+        tokens.join(&self.separator)
     }
 
     /// Decode word text back into a bit stream.
     pub fn decode_bits(&self, text: &str) -> Result<Vec<bool>, String> {
-        let digits = self.tokenize(text)?;
-        if digits.len() % self.block_words != 0 {
+        let mut tokens = self.tokenize(text)?;
+
+        if let Some(start) = self.start.as_deref() {
+            if tokens.first().copied() == Some(start) {
+                tokens.remove(0);
+            } else {
+                return Err(format!("expected start word {start:?}"));
+            }
+        }
+        if let Some(end) = self.end.as_deref() {
+            if tokens.last().copied() == Some(end) {
+                tokens.pop();
+            } else {
+                return Err(format!("expected end word {end:?}"));
+            }
+        }
+
+        if tokens.len() % self.block_words != 0 {
             return Err(format!(
                 "word count {} is not a multiple of the block size {}",
-                digits.len(),
+                tokens.len(),
                 self.block_words
             ));
         }
+
         let n = self.words.len() as u64;
-        let mut bits = Vec::with_capacity(digits.len() / self.block_words * self.block_bits);
-        for block in digits.chunks(self.block_words) {
+        let mut bits = Vec::with_capacity(tokens.len() / self.block_words * self.block_bits);
+        for block in tokens.chunks(self.block_words) {
             let mut value = 0u64;
-            for &digit in block {
+            for token in block {
+                let digit = self
+                    .words
+                    .iter()
+                    .position(|word| word == token)
+                    .ok_or_else(|| format!("unknown word: {token:?}"))?;
                 value = value * n + digit as u64;
             }
             if value >> self.block_bits != 0 {
@@ -132,18 +213,37 @@ impl WordCodec {
         Ok(bits)
     }
 
-    fn tokenize(&self, text: &str) -> Result<Vec<usize>, String> {
-        let mut digits = Vec::new();
+    fn tokenize<'a>(&'a self, text: &'a str) -> Result<Vec<&'a str>, String> {
+        if !self.separator.is_empty() {
+            return Ok(text
+                .split(self.separator.as_str())
+                .filter(|token| !token.is_empty())
+                .collect());
+        }
+
+        let mut tokens = Vec::new();
         let mut rest = text;
         while !rest.is_empty() {
-            match self
-                .words
-                .iter()
-                .position(|word| rest.starts_with(word.as_str()))
-            {
-                Some(index) => {
-                    rest = &rest[self.words[index].len()..];
-                    digits.push(index);
+            let matched = self
+                .start
+                .as_deref()
+                .filter(|token| rest.starts_with(token))
+                .or_else(|| {
+                    self.words
+                        .iter()
+                        .map(String::as_str)
+                        .find(|word| rest.starts_with(word))
+                })
+                .or_else(|| {
+                    self.end
+                        .as_deref()
+                        .filter(|token| rest.starts_with(token))
+                });
+
+            match matched {
+                Some(token) => {
+                    tokens.push(token);
+                    rest = &rest[token.len()..];
                 }
                 None => {
                     let tail: String = rest.chars().take(8).collect();
@@ -151,7 +251,7 @@ impl WordCodec {
                 }
             }
         }
-        Ok(digits)
+        Ok(tokens)
     }
 }
 
@@ -188,14 +288,25 @@ pub struct Encoding {
 
 impl Encoding {
     pub fn new(codebook: Codebook, words: Vec<String>) -> Result<Self, String> {
+        Self::framed(codebook, words, None, None, String::new())
+    }
+
+    pub fn framed(
+        codebook: Codebook,
+        words: Vec<String>,
+        start: Option<String>,
+        end: Option<String>,
+        separator: String,
+    ) -> Result<Self, String> {
         Ok(Self {
             codebook,
-            words: WordCodec::new(words)?,
+            words: WordCodec::framed(words, start, end, separator)?,
         })
     }
 
     pub fn encode(&self, text: &str) -> String {
-        self.words.encode_bits(&self.codebook.encode_terminated(text))
+        self.words
+            .encode_bits(&self.codebook.encode_terminated(text))
     }
 
     pub fn decode(&self, worms: &str) -> Result<String, String> {
@@ -223,8 +334,7 @@ mod tests {
 
     #[test]
     fn three_words_use_a_packing_block() {
-        let (words, bits) = choose_block(3);
-        assert_eq!((words, bits), (7, 11));
+        assert_eq!(choose_block(3), (7, 11));
     }
 
     #[test]
@@ -249,16 +359,50 @@ mod tests {
     }
 
     #[test]
-    fn full_encoding_roundtrips_with_three_words() {
+    fn frame_roundtrips_with_separator() {
+        let codec = WordCodec::framed(
+            vec!["粘粘虫".into(), "扁扁虫".into(), "西瓜虫".into()],
+            Some("咩".into()),
+            Some("咩".into()),
+            " ".into(),
+        )
+        .unwrap();
+        let bits: Vec<bool> = (0..500u32).map(|i| i % 3 == 0).collect();
+        let text = codec.encode_bits(&bits);
+        assert!(text.starts_with("咩 "));
+        assert!(text.ends_with(" 咩"));
+        assert_eq!(&codec.decode_bits(&text).unwrap()[..bits.len()], &bits[..]);
+    }
+
+    #[test]
+    fn frame_roundtrips_without_separator() {
+        let codec = WordCodec::framed(
+            vec!["粘粘虫".into(), "扁扁虫".into()],
+            Some("咩".into()),
+            Some("啊".into()),
+            String::new(),
+        )
+        .unwrap();
+        let bits: Vec<bool> = (0..64u32).map(|i| i % 2 == 0).collect();
+        let text = codec.encode_bits(&bits);
+        assert!(text.starts_with('咩'));
+        assert!(text.ends_with('啊'));
+        assert_eq!(&codec.decode_bits(&text).unwrap()[..bits.len()], &bits[..]);
+    }
+
+    #[test]
+    fn full_encoding_roundtrips_with_frame() {
         let cb = codebook("粘粘虫扁扁虫西瓜虫粘粘虫西瓜虫~ hello world");
-        let enc = Encoding::new(
+        let enc = Encoding::framed(
             cb,
             vec!["粘粘虫".into(), "扁扁虫".into(), "西瓜虫".into()],
+            Some("咩".into()),
+            Some("咩".into()),
+            " ".into(),
         )
         .unwrap();
         let text = "粘粘虫 西瓜虫 hello 鿿🦑 end";
         let worms = enc.encode(text);
-        assert!(worms.chars().all(|c| c == '粘' || c == '扁' || c == '虫' || c == '西' || c == '瓜'));
         assert_eq!(enc.decode(&worms).unwrap(), text);
     }
 }

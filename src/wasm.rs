@@ -20,20 +20,47 @@ fn parse_words(words: &str) -> Vec<String> {
         .collect()
 }
 
-fn build(words: &str) -> Result<Encoding, JsValue> {
-    Encoding::new(codebook(), parse_words(words)).map_err(|e| JsValue::from_str(&e))
+fn opt(value: Option<String>) -> Option<String> {
+    value.filter(|s| !s.is_empty())
 }
 
-/// Encode `text` into worm text using the comma-separated `words`.
+fn build(
+    words: &str,
+    start: Option<String>,
+    end: Option<String>,
+    separator: String,
+) -> Result<Encoding, JsValue> {
+    Encoding::framed(codebook(), parse_words(words), opt(start), opt(end), separator)
+        .map_err(|e| JsValue::from_str(&e))
+}
+
+/// Encode `text` into worm text.
+///
+/// `words` is comma/semicolon/newline separated. `start`/`end` are optional
+/// frame words placed at the very front/back; `separator` goes between tokens.
 #[wasm_bindgen]
-pub fn encode(text: &str, words: &str) -> Result<String, JsValue> {
-    Ok(build(words)?.encode(text))
+pub fn encode(
+    text: &str,
+    words: &str,
+    start: Option<String>,
+    end: Option<String>,
+    separator: String,
+) -> Result<String, JsValue> {
+    Ok(build(words, start, end, separator)?.encode(text))
 }
 
 /// Decode worm text back into the original text.
 #[wasm_bindgen]
-pub fn decode(worms: &str, words: &str) -> Result<String, JsValue> {
-    build(words)?.decode(worms).map_err(|e| JsValue::from_str(&e))
+pub fn decode(
+    worms: &str,
+    words: &str,
+    start: Option<String>,
+    end: Option<String>,
+    separator: String,
+) -> Result<String, JsValue> {
+    build(words, start, end, separator)?
+        .decode(worms)
+        .map_err(|e| JsValue::from_str(&e))
 }
 
 /// Human-readable block info, e.g. "7 words/block, 11 bits/block (1.5714 bits/word)".
