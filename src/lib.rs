@@ -3,6 +3,9 @@ use std::collections::HashMap;
 pub mod huffman;
 pub mod words;
 
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
+
 /// One branch of a decoded internal node.
 ///
 /// `TABLE` stores, for every internal node, the pair `(bit=0, bit=1)`.
